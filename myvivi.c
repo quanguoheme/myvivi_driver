@@ -36,6 +36,7 @@ static struct list_head myvivi_vb_local_queue;
 
 static struct timer_list myvivi_timer;
 
+#include "fillbuf.c"
 
 /* 参考documentations/video4linux/v4l2-framework.txt:
  *     drivers\media\video\videobuf-core.c 
@@ -82,7 +83,9 @@ static int myvivi_buffer_prepare(struct videobuf_queue *vq, struct videobuf_buff
 	vb->height = myvivi_format.fmt.pix.height;
 	vb->field  = field;
     
+    
     /* 1. 做些准备工作 */
+    myvivi_precalculate_bars(0);
 
 #if 0
     /* 2. 调用videobuf_iolock为类型为V4L2_MEMORY_USERPTR的videobuf分配内存 */
@@ -338,7 +341,9 @@ static void myvivi_timer_function(unsigned long data)
 
     /* 1.2 填充数据 */
     vbuf = videobuf_to_vmalloc(vb);
-    memset(vbuf, 73, vb->size);
+    //memset(vbuf, 0xff, vb->size);
+    myvivi_fillbuff(vb);
+    
     vb->field_count++;
     do_gettimeofday(&ts);
     vb->ts = ts;

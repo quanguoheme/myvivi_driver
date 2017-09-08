@@ -142,6 +142,11 @@ static int myvivi_mmap(struct file *file, struct vm_area_struct *vma)
 	return videobuf_mmap_mapper(&myvivi_vb_vidqueue, vma);
 }
 
+static unsigned int myvivi_poll(struct file *file, struct poll_table_struct *wait)
+{
+	return videobuf_poll_stream(file, &myvivi_vb_vidqueue, wait);
+}
+
 static int myvivi_vidioc_querycap(struct file *file, void  *priv,
 					struct v4l2_capability *cap)
 {
@@ -240,6 +245,18 @@ static int myvivi_vidioc_dqbuf(struct file *file, void *priv, struct v4l2_buffer
 				file->f_flags & O_NONBLOCK));
 }
 
+static int myvivi_vidioc_streamon(struct file *file, void *priv, enum v4l2_buf_type i)
+{
+	return videobuf_streamon(&myvivi_vb_vidqueue);
+}
+
+static int myvivi_vidioc_streamoff(struct file *file, void *priv, enum v4l2_buf_type i)
+{
+	videobuf_streamoff(&myvivi_vb_vidqueue);
+    return 0;
+}
+
+
 static const struct v4l2_ioctl_ops myvivi_ioctl_ops = {
         // 表示它是一个摄像头设备
         .vidioc_querycap      = myvivi_vidioc_querycap,
@@ -255,13 +272,10 @@ static const struct v4l2_ioctl_ops myvivi_ioctl_ops = {
         .vidioc_querybuf      = myvivi_vidioc_querybuf,
         .vidioc_qbuf          = myvivi_vidioc_qbuf,
         .vidioc_dqbuf         = myvivi_vidioc_dqbuf,
-
-#if 0    
         
         // 启动/停止
         .vidioc_streamon      = myvivi_vidioc_streamon,
         .vidioc_streamoff     = myvivi_vidioc_streamoff,   
-#endif
 };
 
 
@@ -271,6 +285,7 @@ static const struct v4l2_file_operations myvivi_fops = {
     .release    = myvivi_close,
     .mmap       = myvivi_mmap,
     .ioctl      = video_ioctl2, /* V4L2 ioctl handler */
+    .poll       = myvivi_poll,
 };
 
 

@@ -31,6 +31,10 @@ static struct v4l2_format myvivi_format;
 static struct videobuf_queue myvivi_vb_vidqueue;
 static spinlock_t myvivi_queue_slock;
 
+static struct list_head myvivi_vb_local_queue;
+
+
+static struct timer_list myvivi_timer;
 
 
 /* 参考documentations/video4linux/v4l2-framework.txt:
@@ -71,6 +75,13 @@ static int myvivi_buffer_setup(struct videobuf_queue *vq, unsigned int *count, u
 static int myvivi_buffer_prepare(struct videobuf_queue *vq, struct videobuf_buffer *vb,
 						enum v4l2_field field)
 {
+    /* 0. 设置videobuf */
+	vb->size = myvivi_format.fmt.pix.sizeimage;
+    vb->bytesperline = myvivi_format.fmt.pix.bytesperline;
+	vb->width  = myvivi_format.fmt.pix.width;
+	vb->height = myvivi_format.fmt.pix.height;
+	vb->field  = field;
+    
     /* 1. 做些准备工作 */
 
 #if 0
@@ -88,15 +99,19 @@ static int myvivi_buffer_prepare(struct videobuf_queue *vq, struct videobuf_buff
 }
 
 
-/* APP调用ioctlVIDIOC_QBUF时:
+/* APP调用ioctl VIDIOC_QBUF时:
  * 1. 先调用buf_prepare进行一些准备工作
- * 2. 把buf放入队列
- * 3. 调用buf_queue(起通知作用)
+ * 2. 把buf放入stream队列
+ * 3. 调用buf_queue(起通知、记录作用)
  */
 static void myvivi_buffer_queue(struct videobuf_queue *vq, struct videobuf_buffer *vb)
 {
 	vb->state = VIDEOBUF_QUEUED;
-	//list_add_tail(&buf->vb.queue, &vidq->active);
+
+    /* 把videobuf放入本地一个队列尾部
+     * 定时器处理函数就可以从本地队列取出videobuf
+     */
+    list_add_tail(&vb->queue, &myvivi_vb_local_queue);
 }
 
 /* APP不再使用队列时, 用它来释放内存 */
@@ -125,12 +140,16 @@ static int myvivi_open(struct file *file)
 			NULL, &myvivi_queue_slock, V4L2_BUF_TYPE_VIDEO_CAPTURE, V4L2_FIELD_INTERLACED,
 			sizeof(struct videobuf_buffer), NULL); /* 倒数第2个参数是buffer的头部大小 */
 
+    myvivi_timer.expires = jiffies + 1;
+    add_timer(&myvivi_timer);
+
 	return 0;
 }
 
 
 static int myvivi_close(struct file *file)
 {
+    del_timer(&myvivi_timer);
 	videobuf_stop(&myvivi_vb_vidqueue);
 	videobuf_mmap_free(&myvivi_vb_vidqueue);
     
@@ -295,6 +314,48 @@ static void myvivi_release(struct video_device *vdev)
 {
 }
 
+static void myvivi_timer_function(unsigned long data)
+{
+    struct videobuf_buffer *vb;
+	void *vbuf;
+	struct timeval ts;
+    
+    /* 1. 构造数据: 从队列头部取出第1个videobuf, 填充数据
+     */
+
+    /* 1.1 从本地队列取出第1个videobuf */
+    if (list_empty(&myvivi_vb_local_queue)) {
+        goto out;
+    }
+    
+    vb = list_entry(myvivi_vb_local_queue.next,
+             struct videobuf_buffer, queue);
+    
+    /* Nobody is waiting on this buffer, return */
+    if (!waitqueue_active(&vb->done))
+        goto out;
+    
+
+    /* 1.2 填充数据 */
+    vbuf = videobuf_to_vmalloc(vb);
+    memset(vbuf, 73, vb->size);
+    vb->field_count++;
+    do_gettimeofday(&ts);
+    vb->ts = ts;
+    vb->state = VIDEOBUF_DONE;
+
+    /* 1.3 把videobuf从本地队列中删除 */
+    list_del(&vb->queue);
+
+    /* 2. 唤醒进程: 唤醒videobuf->done上的进程 */
+    wake_up(&vb->done);
+    
+out:
+    /* 3. 修改timer的超时时间 : 30fps, 1秒里有30帧数据
+     *    每1/30 秒产生一帧数据
+     */
+    mod_timer(&myvivi_timer, jiffies + HZ/30);
+}
 
 static int myvivi_init(void)
 {
@@ -321,6 +382,12 @@ static int myvivi_init(void)
 
     /* 3. 注册 */
     error = video_register_device(myvivi_device, VFL_TYPE_GRABBER, -1);
+
+    /* 用定时器产生数据并唤醒进程 */
+	init_timer(&myvivi_timer);
+    myvivi_timer.function  = myvivi_timer_function;
+
+    INIT_LIST_HEAD(&myvivi_vb_local_queue);
     
     return error;
 }
